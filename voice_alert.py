@@ -1,210 +1,199 @@
-import sys
-import os
+import cv2
 import time
 import threading
 import queue
+import os
+import sys
 import RPi.GPIO as GPIO
+from ultralytics import YOLO
 import pygame
 
 # =========================================================
-# 초기 설정 및 오디오 믹서 초기화
+# 1. 초기 설정 및 오디오 믹서 초기화
 # =========================================================
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
-
-# pygame 오디오 시스템 초기화
 pygame.mixer.init()
 
-# =========================================================
-# 초음파 센서 핀 설정 (최신 업데이트 핀 맵 반영)
-# =========================================================
+# 하측부 제거한 3개 센서 핀 맵 및 타이트한 거리 설정 (50cm)
 SENSORS = {
-    'front': {'trig': 4, 'echo': 5},       # 전방 -> caution_front.mp3
-    'left': {'trig': 6, 'echo': 27},      # 좌측면 -> caution_left.mp3
-    'right': {'trig': 12, 'echo': 13},    # 우측면 -> caution_right.mp3
-    'left_under': {'trig': 16, 'echo': 17},  # 좌측하부 -> caution_under.mp3 매칭
-    'right_under': {'trig': 20, 'echo': 21}  # 우측하부 -> caution_under.mp3 매칭
+    'front': {'trig': 4, 'echo': 5, 'limit': 50},
+    'left':  {'trig': 6, 'echo': 27, 'limit': 50},
+    'right': {'trig': 12, 'echo': 13, 'limit': 50}
 }
 
 for name, pins in SENSORS.items():
     GPIO.setup(pins['trig'], GPIO.OUT)
     GPIO.setup(pins['echo'], GPIO.IN)
 
-# =========================================================
 # 오디오 파일 경로 설정
-# =========================================================
 SOUND_DIR = "/home/team-d/obstacle_detection/sounds/"
 OBJECT_DIR = SOUND_DIR + "objects/"
 SYSTEM_DIR = SOUND_DIR + "system/"
 CAUTION_DIR = SOUND_DIR + "caution/"
 
-# =========================================================
-# 공유 데이터 및 큐 설정
-# =========================================================
+# 공유 데이터 및 오디오 큐 설정
 audio_queue = queue.Queue(maxsize=1)
 dist_data = {name: 400 for name in SENSORS}
 running = True
 
 # =========================================================
-# 초음파 거리 측정 함수
+# 2. 초음파 거리 측정 함수 (절대 굳지 않는 타임아웃 퓨즈 탑재)
 # =========================================================
 def get_distance(trig, echo):
     GPIO.output(trig, False)
     time.sleep(0.0002)
-
     GPIO.output(trig, True)
     time.sleep(0.00001)
     GPIO.output(trig, False)
 
-    start_time = time.time()
-    timeout = start_time + 0.006  # 약 1m 이내 제한
+    timeout = time.time() + 0.006  # 0.006초(약 1m) 지나면 미련 없이 탈출
+    pulse_start = time.time()
+    pulse_end = time.time()
 
     while GPIO.input(echo) == 0:
-        start_time = time.time()
-        if start_time > timeout:
-            return 100.0
+        pulse_start = time.time()
+        if pulse_start > timeout: return 999.0
 
     while GPIO.input(echo) == 1:
-        stop_time = time.time()
-        if stop_time > timeout:
-            return 100.0
+        pulse_end = time.time()
+        if pulse_end > timeout: return 999.0
 
-    duration = stop_time - start_time
-    distance = (duration * 34300) / 2
-    return round(distance, 0)
+    duration = pulse_end - pulse_start
+    return round((duration * 34300) / 2, 0)
 
-# =========================================================
-# 초음파 센서 모니터링 스레드
-# =========================================================
 def ultrasonic_thread():
     global dist_data, running
     while running:
         for name, pins in SENSORS.items():
             dist_data[name] = get_distance(pins['trig'], pins['echo'])
-            time.sleep(0.002)
+            time.sleep(0.005)
 
 # =========================================================
-# 🔊 초고속 오디오 재생 스레드
+# 3. 오디오 재생 워커 스레드 (로컬 MP3 조립 방식)
 # =========================================================
 def audio_worker():
     global running
     while running:
         try:
             task = audio_queue.get(timeout=0.005)
-
-            # 최신 경보 우선 재생을 위해 대기 열 청소
             with audio_queue.mutex:
-                audio_queue.queue.clear()
+                audio_queue.queue.clear()  # 대기열 비워서 딜레이 방지
 
             task_type = task['type']
             
-            # Case 1: 초음파 센서 경고 재생
             if task_type == 'caution':
                 direction = task['direction']
-                
-                # 좌측하부(left_under)나 우측하부(right_under)는 둘 다 'under' 파일로 매칭
-                if 'under' in direction:
-                    file_path = f"{CAUTION_DIR}caution_under.mp3"
-                else:
-                    file_path = f"{CAUTION_DIR}caution_{direction}.mp3"
-                
+                file_path = f"{CAUTION_DIR}caution_{direction}.mp3"
                 if os.path.exists(file_path):
                     pygame.mixer.music.load(file_path)
                     pygame.mixer.music.play()
-                    while pygame.mixer.music.get_busy(): 
-                        time.sleep(0.01)
+                    while pygame.mixer.music.get_busy(): time.sleep(0.01)
 
-            # Case 2: YOLO 다중 객체 실시간 안내 문장 조립
             elif task_type == 'multi_objects':
                 class_names = task['class_names']
-                
-                # 1. 감지된 객체 음성 연속 재생 (vending_machine.mp3 등 언더바 형태 그대로 로드)
                 for cls in class_names:
                     file_obj = f"{OBJECT_DIR}{cls}.mp3"
                     if os.path.exists(file_obj):
                         pygame.mixer.music.load(file_obj)
                         pygame.mixer.music.play()
-                        while pygame.mixer.music.get_busy(): 
-                            time.sleep(0.01)
+                        while pygame.mixer.music.get_busy(): time.sleep(0.01)
                 
-                # 2. 공통 서술어 믹싱 ("앞에" -> "있습니다")
                 for f_path in [f"{SYSTEM_DIR}front.mp3", f"{SYSTEM_DIR}exist.mp3"]:
                     if os.path.exists(f_path):
                         pygame.mixer.music.load(f_path)
                         pygame.mixer.music.play()
-                        while pygame.mixer.music.get_busy(): 
-                            time.sleep(0.01)
+                        while pygame.mixer.music.get_busy(): time.sleep(0.01)
 
             audio_queue.task_done()
-
         except queue.Empty:
             continue
-        except Exception as e:
-            print(f"오디오 재생 오류: {e}")
+
+# 스레드 기동
+threading.Thread(target=ultrasonic_thread, daemon=True).start()
+threading.Thread(target=audio_worker, daemon=True).start()
 
 # =========================================================
-# 스레드 구동
+# 4. 🚀 핵심: 파이썬 내부에서 YOLO 모델 및 웹캠 직접 구동
 # =========================================================
-t_sonic = threading.Thread(target=ultrasonic_thread, daemon=True)
-t_audio = threading.Thread(target=audio_worker, daemon=True)
+# 우리가 만든 전용 가중치 파일 로드
+MODEL_PATH = "/home/team-d/obstacle_detection/best_complete2_ncnn_model"
+print("우리 팀 YOLO NCNN 모델 로딩 중...")
+model = YOLO(MODEL_PATH, task='detect')
 
-t_sonic.start()
-t_audio.start()
+print("카메라를 직접 활성화합니다...")
+# 라즈베리파이 5 백엔드 버그 방지용 CAP_V4L2 명시 및 버퍼 최적화
+cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+if not cap.isOpened():
+    cap = cv2.VideoCapture(4, cv2.CAP_V4L2) # 0번 안 열리면 4번 대안 진입
 
-# =========================================================
-# 메인 예측 루프 (YOLO 텍스트 파이프라인 수신)
-# =========================================================
-print("보행 보조 시스템 시작 (로컬 단어 조립 모드 - 5센서 대응)")
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)   # 연산 속도를 위해 해상도 다이어트
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)      # 카메라에 프레임이 고여서 생기는 밀림 방지
 
-last_speak_time = 0
-last_alert_time = 0
+if not cap.isOpened():
+    print("❌ 에러: 카메라를 열 수 없습니다. 선 연결을 확인하세요.")
+    GPIO.cleanup()
+    sys.exit()
 
-# 14개 핵심 클래스 리스트
+print("🎯 모든 시스템이 한 장의 코드로 통합 구동됩니다!")
+
 target_classes = [
     'elevator', 'vending_machine', 'trash_bin', 'self_service_cafe', 
     'water_dispenser', 'locker', 'door', 'obstacle', 'photo_copier', 
     'person', 'lectern', 'desk', 'chair', 'signboard'
 ]
 
+last_speak_time = 0
+last_alert_time = 0
+
+# =========================================================
+# 5. 메인 통합 실시간 루프
+# =========================================================
 try:
-    for line in sys.stdin:
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret: break
+
         current_time = time.time()
 
-        # 1. 초음파 센서 근접 경고 감지 (50cm 미만)
+        # [A] 초음파 센서 실시간 경고 (50cm 미만)
         alert_triggered = False
-        for direction, distance in dist_data.items():
-            if distance < 50:
-                if current_time - last_alert_time > 0.5:  # 경고 주기 0.5초 커트
+        for direction, pins in SENSORS.items():
+            if dist_data[direction] < pins['limit']:
+                if current_time - last_alert_time > 0.5:
                     audio_queue.put({'type': 'caution', 'direction': direction})
                     last_alert_time = current_time
                     alert_triggered = True
-                    break  # 하나라도 터지면 즉시 루프 탈출 후 재생 처리
+                    break
         
-        # 초음파 경고가 발생했다면 YOLO 안내는 한 템포 패스 (안전 최우선)
         if alert_triggered:
             continue
 
-        # 2. YOLO 다중 객체 안내 기능 (3.0초 주기 유지)
+        # [B] 파이썬 내부에서 직접 YOLO 예측 (3초 주기로 제어하여 CPU 발열/부하 원천 차단)
         if current_time - last_speak_time > 3.0:
-            detected_now = []
+            # imgsz=320 경량화 옵션으로 라즈베리파이 속도 극대화
+            results = model.predict(frame, conf=0.7, verbose=False, imgsz=320)
             
-            for cls in target_classes:
-                if cls in line:
-                    detected_now.append(cls)
+            detected_now = []
+            for result in results:
+                for box in result.boxes:
+                    cls_id = int(box.cls[0])
+                    cls_name = model.names[cls_id]
+                    if cls_name in target_classes:
+                        detected_now.append(cls_name)
 
             if detected_now:
-                # 중복 제거
-                detected_now = list(set(detected_now))
-                
-                # 큐에 다중 객체 리스트 전달
+                detected_now = list(set(detected_now))  # 중복 제거
                 audio_queue.put({'type': 'multi_objects', 'class_names': detected_now})
                 last_speak_time = current_time
 
-except KeyboardInterrupt:
-    print("\n시스템 종료 중...")
+        time.sleep(0.01) # CPU 숨 쉴 구멍 마련
 
+except KeyboardInterrupt:
+    print("\n보행 시스템 안전 종료.")
 finally:
     running = False
-    time.sleep(0.1)
+    cap.release()
     GPIO.cleanup()
-    print("GPIO 및 시스템 정리 완료.")
+    print("모든 하드웨어 점유권이 안전하게 해제되었습니다.")
