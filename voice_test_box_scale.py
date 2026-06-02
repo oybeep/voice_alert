@@ -121,10 +121,10 @@ def play_audio(data):
 threading.Thread(target=ultrasonic_worker, daemon=True).start()
 threading.Thread(target=audio_worker, daemon=True).start()
 
-# 🚨 [수정] 오작동을 유발하는 'obstacle' 검출 항목을 리스트에서 완전히 제거했습니다.
+# 🎯 [복구 완] 'obstacle' 클래스를 누락 없이 다시 리스트에 정상 배치했습니다.
 TARGET_OBJECTS = [
     'elevator', 'vending_machine', 'trash_bin', 'self_service_cafe',
-    'water_dispenser', 'locker', 'door', 'photo_copier',
+    'water_dispenser', 'locker', 'door', 'obstacle', 'photo_copier',
     'person', 'lectern', 'desk', 'chair', 'signboard'
 ]
 
@@ -135,7 +135,7 @@ last_speak_time = 0
 print("시스템 시작")
 
 # =========================================================
-# 14. 메인 루프 
+# 14. 메인 루프 (하이브리드 정렬 알고리즘)
 # =========================================================
 try:
     while True:
@@ -163,33 +163,40 @@ try:
         line = line.lower().strip()
 
         # =========================================================
-        # 🔍 터미널 텍스트에서 객체와 박스 크기 파싱 (안전 가드 강화)
+        # 🔍 철저한 텍스트 파싱 및 면적 가로채기 방지 로직
         # =========================================================
         detected_candidates = []
 
         for obj in TARGET_OBJECTS:
             if obj in line:
-                # 정규식으로 해당 오브젝트 뒤에 나오는 숫자(크기) 추출 (예: person: 320x240)
+                # 1. 특정 오브젝트명 옆에 '명확하게' 크기 수치가 바짝 붙어있는지 정밀 검사
+                # 예: "obstacle: 320x240" 이 형태만 매칭
                 match = re.search(rf"{obj}\s*:\s*(\d+)\s*x\s*(\d+)", line)
                 
                 if match:
                     width = int(match.group(1))
                     height = int(match.group(2))
-                    area = width * height  # 박스 면적 계산
-                    
-                    # 방향 판단
-                    if "left" in line: obj_dir = "left"
-                    elif "right" in line: obj_dir = "right"
-                    else: obj_dir = "front"
+                    area = width * height
+                else:
+                    # 2. 크기 포맷이 없거나 카메라 해상도 텍스트(480x640)와 분리된 경우
+                    # 텍스트 라인에서 해당 단어가 출현한 '인덱스 위치'를 기준으로 가중치를 둔다.
+                    # YOLO는 중요한/확신도 높은 객체를 문장 앞에 먼저 써주므로, 앞쪽에 나올수록 area 점수를 높게 부여
+                    str_position = line.find(obj)
+                    area = 10000 - str_position  # 앞에 있을수록 가상 면적이 커짐 (최소 1 이상 보장)
 
-                    detected_candidates.append({'name': obj, 'dir': obj_dir, 'area': area})
+                # 방향 판단
+                if "left" in line: obj_dir = "left"
+                elif "right" in line: obj_dir = "right"
+                else: obj_dir = "front"
 
-        # 감지된 유효 객체가 있고, 말할 주기(3초)가 되었다면
-        if detected_candidates and (current_time - last_speak_time > 3.0):
-            # ⭐ 실제 크기(area) 데이터가 확보된 대상들만 크기순으로 내림차순 정렬!
+                detected_candidates.append({'name': obj, 'dir': obj_dir, 'area': area})
+
+        # 감지된 객체가 존재하고, 음성 안내 주기(3초) 충족 시
+        if detected_candidates and (current_time - last_speak_time > 1.5):
+            # 면적(또는 신뢰도 위치 점수) 기준 내림차순 정렬
             detected_candidates.sort(key=lambda x: x['area'], reverse=True)
             
-            # 가장 크고 가까운 객체 1등 선택
+            # 정렬 후 최상단 1등 객체 추출
             best_target = detected_candidates[0]
             
             current_identity = f"{best_target['dir']}_{best_target['name']}"
