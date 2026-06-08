@@ -21,7 +21,7 @@ SENSORS = {
     'front':      {'trig': 4,  'echo': 5,  'limit': 50},
     'left':       {'trig': 6,  'echo': 27, 'limit': 30},
     'right':      {'trig': 12, 'echo': 13, 'limit': 30},
-    'left_under': {'trig': 16, 'echo': 17, 'limit': 60}, 
+    'left_under': {'trig': 16, 'echo': 17, 'limit': 60},
     'right_under':{'trig': 20, 'echo': 21, 'limit': 60} 
 }
 
