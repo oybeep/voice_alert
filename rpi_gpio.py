@@ -241,6 +241,6 @@ except KeyboardInterrupt:
     print("\n종료 요구 수렴", flush=True)
 finally:
     running = False
-    GPIO.cleanup()  # ✨ 사용한 GPIO 핀 깔끔하게 초기화 종료
+    GPIO.cleanup()
     pygame.mixer.quit()
     print("시스템 안전 종료 완료", flush=True)
