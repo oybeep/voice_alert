@@ -4,7 +4,7 @@ import threading
 import queue
 import os
 import pygame
-import RPi.GPIO as GPIO  # ✨ pigpio 대신 RPi.GPIO 임포트
+import RPi.GPIO as GPIO 
 import socket
 from collections import deque
 import statistics
