@@ -73,7 +73,7 @@ try:
         current_time = time.time()
         
         # 무선으로 가져온 영상에 YOLOv8 고속 추론 적용 (imgsz=320으로 CPU 부담 최소화)
-        results = model(frame, conf=0.7, imgsz=320, show=False)
+        results = model(frame, conf=0.75, imgsz=320, show=False)
 
         line = ""
         for result in results:
