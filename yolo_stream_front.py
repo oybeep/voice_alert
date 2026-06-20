@@ -101,7 +101,7 @@ try:
                 break
 
         # 위험 사물이 식별되면 라즈베리 파이로 문자열 전송
-        if line and (current_time - last_speak_time > 3.0):
+        if line and (current_time - last_speak_time > 2.0):
             if line != last_spoken_object:
                 print(f"[PC ➔ RPi 텍스트 송신] {line}")
                 t_client.sendall((line + "\n").encode('utf-8'))
