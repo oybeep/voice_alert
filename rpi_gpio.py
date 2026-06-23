@@ -112,9 +112,10 @@ def network_server_worker():
             t_conn, t_addr = text_server.accept()
             print(f"[RPi] PC 브레인 도킹 완료! (영상/텍스트 세션 연결)", flush=True)
 
-            # 라즈베리 파이에 연결된 웹캠 열기
+            # 🛠️ 검증된 진짜 비디오 인덱스인 0번으로 고정!
             cam = cv2.VideoCapture(0)
-            # 무선 대역폭 최적화를 위해 해상도 다운스케일링 ($320 \times 240$)
+
+            # 무선 대역폭 최적화를 위해 해상도 다운스케일링 (320 x 240)
             cam.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
             cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
