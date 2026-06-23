@@ -9,7 +9,7 @@ from ultralytics import YOLO
 # =========================================================
 # ⚙️ 변수 세팅
 # =========================================================
-RPI_IP = "192.168.0.21"  # 👈 내 라즈베리 파이 실제 무선 IP 입력!
+RPI_IP = "172.20.10.3" 
 V_PORT = 9998
 T_PORT = 9999
 
@@ -43,6 +43,9 @@ last_spoken_object = None
 
 try:
     while True:
+        # 🛠️ [딜레이 해결] 소켓에 밀려있는 오래된 패킷 버퍼 강제 초기화
+        v_client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 0)
+
         # 무선 패킷 데이터로부터 이미지 크기(Header) 추출하기
         while len(data) < payload_size:
             packet = v_client.recv(4096)
@@ -72,8 +75,8 @@ try:
 
         current_time = time.time()
         
-        # 무선으로 가져온 영상에 YOLOv8 고속 추론 적용 (imgsz=320으로 CPU 부담 최소화)
-        results = model(frame, conf=0.75, imgsz=320, show=False)
+        # 🛠️ [인식률 개선] conf를 0.25로 낮추어 소형 사물도 스무스하게 인식하도록 변경
+        results = model(frame, conf=0.25, imgsz=320, show=False)
 
         line = ""
         for result in results:
@@ -84,14 +87,19 @@ try:
                 
                 if obj in TARGET_OBJECTS:
                     h, w, _ = frame.shape
-                    box_center_x = box.xyxn[0][0].item() * w
+                    # 🛠️ [오타 수정] xyxn -> xyxyn 으로 교체 완료! (튕김 현상 해결)
+                    box_center_x = box.xyxyn[0][0].item() * w
                     
-                    if box_center_x < w * 0.33: obj_dir = "left"
-                    elif box_center_x > w * 0.66: obj_dir = "right"
-                    else: obj_dir = "front"
-                    
-                    line = f"{obj_dir}_{obj}"
-                    break
+                    # 💡 정면 조준(중앙 정렬) 필터링 기법 적용
+                    if w * 0.2 <= box_center_x <= w * 0.8:
+                        obj_dir = "front"
+                        line = f"{obj_dir}_{obj}"
+                        break
+                    else:
+                        line = ""
+
+            if line:  
+                break
 
         # 위험 사물이 식별되면 라즈베리 파이로 문자열 전송
         if line and (current_time - last_speak_time > 2.0):
@@ -101,9 +109,11 @@ try:
                 last_spoken_object = line
                 last_speak_time = current_time
 
-        # 모니터링창 출력
+        # 🛠️ [예외 처리] 아무것도 감지하지 못해도 스트리밍 화면 창은 무조건 유지!
         if len(results) > 0:
             cv2.imshow("Wireless PC Brain Engine (YOLOv8)", results[0].plot())
+        else:
+            cv2.imshow("Wireless PC Brain Engine (YOLOv8)", frame)
             
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
