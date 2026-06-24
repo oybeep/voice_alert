@@ -16,7 +16,7 @@ T_PORT = 9999
 
 TARGET_OBJECTS = [
     'elevator', 'vending_machine', 'trash_bin', 'self_service_cafe',
-    'water_dispenser', 'locker', 'door', 'obstacle', 'photo_copier',
+    'water_dispenser', 'locker', 'door', 'cabinet', 'photo_copier',
     'person', 'lectern', 'desk', 'chair', 'signboard'
 ]
 
@@ -35,7 +35,7 @@ except Exception as e:
 
 # 2. 모델 로드
 print("[PC] YOLOv8 모델 로딩 중...")
-model = YOLO("best_complete4.pt")
+model = YOLO("best_final.pt")
 
 # =========================================================
 # 💡 [딜레이 제어] 영상 수신 전용 쓰레드 구현
