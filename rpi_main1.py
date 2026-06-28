@@ -89,7 +89,7 @@ for name, pins in SENSORS_US.items():
 # 🔵 하단 ToF 센서 (바닥 턱 및 계단 감지용 I2C 통신)
 # 'limit'는 보행기가 지면으로부터 떠 있거나 계단을 만났을 때 측정되는 기준 거리(cm)입니다.
 SENSORS_TOF = {
-    'center_under': {'limit': 80}
+    'center_under': {'limit': 60}
 }
 
 # I2C 버스를 초기화하고 VL53L0X ToF 센서 객체 연결 시도
