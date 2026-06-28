@@ -12,84 +12,71 @@ import struct
 from collections import deque
 import statistics
 import requests
-
-# ToF 센서용 I2C 라이브러리
-import board
-import busio
-import adafruit_vl53l0x
+import json  # 안전한 JSON 템플릿 빌드를 위해 유지
 
 # =========================================================
-# ⚙️ 1. 카카오 디벨로퍼스 설정
+# ⚙️ 카카오 디벨로퍼스 설정 (팀원 최신 API 반영)
 # =========================================================
-# 두 번째 코드의 최신 토큰 값으로 반영
-ACCESS_TOKEN = "V6vqe5l-eiLXsvP4sm8jgiWEKanHg1k_AAAAAQoNDF4AAAGe-ATlELbGP5Eb7W-4"
+ACCESS_TOKEN = "WAyiYug8W5mIDrROBOBlAL7WBassoVHqAAAAAQoXIiAAAAGe99dKEbbGP5Eb7W-4"
+THRESHOLD_DISTANCE = 10.0  # 10cm 기준
 
-# 두 번째 코드의 확장된 방향 맵 반영
 direction_map = {
-    "left": "왼쪽",
-    "front": "정면",
-    "right": "오른쪽",
-    "center_under": "하단 중앙",
-    "right_under": "오른쪽 하단",
-    "left_under": "왼쪽 하단",
-    "front_under": "정면 하단"
+    "left": "왼쪽", "front": "정면", "right": "오른쪽",
+    "right_under": "오른쪽 하단", "left_under": "왼쪽 하단", "front_under": "정면 하단"
 }
 
-alert_status = {key: False for key in direction_map.keys()}
+# 각 방향별 알림 전송 여부를 추적하는 딕셔너리
+alert_sent_status = {key: False for key in direction_map}
 
 def send_kakao_alert(message):
+    """메인 루프 병목 방지를 위해 별도 스레드에서 비동기로 실행될 함수"""
     def _send():
         try:
             url = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
-            headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
-            data = {
-                "template_object": f'{{"object_type": "text", "text": "{message}", "link": {{"web_url": "https://developers.kakao.com"}}}}'
+            headers = {
+                "Authorization": f"Bearer {ACCESS_TOKEN}",
+                "Content-Type": "application/x-www-form-urlencoded"
             }
-            # 지연 방지를 위해 타임아웃 2초 설정
+            
+            template_object = {
+                "object_type": "text",
+                "text": message,
+                "link": {"web_url": "https://developers.kakao.com"}
+            }
+            
+            data = {"template_object": json.dumps(template_object, ensure_ascii=False)}
             response = requests.post(url, headers=headers, data=data, timeout=2)
+            
             if response.status_code == 200:
-                print(f"\n[카카오톡 알림 전송 완료] {message}", flush=True)
+                print(f"[카카오톡] 전송 성공! ({message[:15]}...)", flush=True)
             else:
-                print(f"\n[카카오톡 에러] 코드 {response.status_code}", flush=True)
+                print(f"[카카오톡 에러] 코드: {response.status_code} | 사유: {response.text}", flush=True)
         except Exception as e:
-            print(f"\n[카카오톡 전송 실패] {e}", flush=True)
+            print(f"카카오 알림 전송 실패: {e}", flush=True)
 
     threading.Thread(target=_send, daemon=True).start()
 
 # =========================================================
-# 2. RPi.GPIO 및 하드웨어 센서 초기화 (초음파 3개 + ToF 1개)
+# 1. RPi.GPIO 초기화
 # =========================================================
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
 
-# 🟢 상단 초음파 센서 (3개)
-SENSORS_US = {
-    'front': {'trig': 4,  'echo': 5,  'limit': 50},
-    'left':  {'trig': 6,  'echo': 27, 'limit': 30},
-    'right': {'trig': 12, 'echo': 13, 'limit': 30}
+SENSORS = {
+    'front':       {'trig': 4,  'echo': 5,  'limit': 50},
+    'left':        {'trig': 6,  'echo': 27, 'limit': 30},
+    'right':       {'trig': 12, 'echo': 13, 'limit': 30},
+    'left_under':  {'trig': 16, 'echo': 17, 'limit': 55},
+    'right_under': {'trig': 20, 'echo': 21, 'limit': 55}
 }
 
-for name, pins in SENSORS_US.items():
+for name, pins in SENSORS.items():
     GPIO.setup(pins['trig'], GPIO.OUT)
     GPIO.setup(pins['echo'], GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
     GPIO.output(pins['trig'], False)
 
-# 🔵 하단 ToF 센서 (1개)
-SENSORS_TOF = {
-    'center_under': {'limit': 80}
-}
-
-# I2C 통신 및 ToF 센서 객체 생성
-try:
-    i2c = busio.I2C(board.SCL, board.SDA)
-    tof_sensor = adafruit_vl53l0x.VL53L0X(i2c)
-    print("[하드웨어] ToF 센서 연결 성공")
-except Exception as e:
-    print(f"[하드웨어 에러] ToF 센서를 찾을 수 없습니다: {e}")
-    tof_sensor = None
-
 # =========================================================
-# 3. 사운드 및 큐, 데이터 버퍼 설정
+# 2. 사운드 및 큐 설정
 # =========================================================
 pygame.mixer.init()
 VOLUME_LEVEL = 0.40
@@ -104,18 +91,18 @@ audio_queue = queue.Queue(maxsize=1)
 yolo_queue = queue.Queue(maxsize=10)
 running = True
 
-# 모든 센서 데이터 통합 (초기값 0.0)
-all_sensors = list(direction_map.keys()) # 모든 가용 방향에 대응 버퍼 준비
-dist_data = {name: 0.0 for name in all_sensors}
-distance_buffer = {name: deque(maxlen=5) for name in all_sensors}
+dist_data = {name: 0.0 for name in SENSORS}
+distance_buffer = {name: deque(maxlen=5) for name in SENSORS}
 dist_lock = threading.Lock()
 
-caution_spoken = {name: False for name in all_sensors}
+# 전역에서 최근 인식된 사물 이름을 공유하기 위한 딕셔너리
+last_detected_object = {key: "unknown" for key in SENSORS}
+obj_lock = threading.Lock()
 
 # =========================================================
-# 4-1. 초음파 센서 전용 워커
+# 3. 초음파 센서 측정 함수 및 워커
 # =========================================================
-def measure_ultrasonic(trig, echo):
+def measure_distance(trig, echo):
     GPIO.output(trig, True)
     time.sleep(0.00001)
     GPIO.output(trig, False)
@@ -124,57 +111,33 @@ def measure_ultrasonic(trig, echo):
     pulse_start = timeout_start
     pulse_end = timeout_start
 
-    # 타임아웃 40ms 초과 시 허공(999.0) 반환
     while GPIO.input(echo) == 0:
         pulse_start = time.time()
-        if pulse_start - timeout_start > 0.04: return 999.0
+        if pulse_start - timeout_start > 0.04:
+            return 999.0
 
     while GPIO.input(echo) == 1:
         pulse_end = time.time()
-        if pulse_end - pulse_start > 0.04: return 999.0
+        if pulse_end - pulse_start > 0.04:
+            return 999.0
 
     return round((pulse_end - pulse_start) * 17150, 1)
 
 def ultrasonic_worker():
     while running:
-        for name, pins in SENSORS_US.items():
+        for name, pins in SENSORS.items():
             if not running: break
-            distance = measure_ultrasonic(pins['trig'], pins['echo'])
+            distance = measure_distance(pins['trig'], pins['echo'])
 
             distance_buffer[name].append(distance)
             with dist_lock:
                 dist_data[name] = round(statistics.median(distance_buffer[name]), 1)
+
             time.sleep(0.02)
         time.sleep(0.01)
 
 # =========================================================
-# 4-2. ToF 센서 전용 워커
-# =========================================================
-def tof_worker():
-    while running:
-        if not running: break
-
-        if tof_sensor is not None:
-            try:
-                # VL53L0X 센서는 mm 단위로 반환하므로 10을 나누어 cm로 변환
-                dist_cm = tof_sensor.range / 10.0
-
-                # 측정 범위를 벗어난 비정상 값이거나 너무 멀면 허공(계단)으로 간주
-                if dist_cm > 120.0 or dist_cm <= 0:
-                    dist_cm = 999.0
-            except Exception:
-                dist_cm = 999.0
-        else:
-            dist_cm = 999.0
-
-        distance_buffer['center_under'].append(dist_cm)
-        with dist_lock:
-            dist_data['center_under'] = round(statistics.median(distance_buffer['center_under']), 1)
-
-        time.sleep(0.03)
-
-# =========================================================
-# 5. 영상 송신(무선 스트리밍) + 텍스트 수신 통합 서버
+# 📡 4. 영상 송신(무선 스트리밍) + 텍스트 수신 통합 서버
 # =========================================================
 def network_server_worker():
     video_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -232,7 +195,7 @@ def network_server_worker():
             time.sleep(1)
 
 # =========================================================
-# 6. 오디오 시스템
+# 5. 오디오 시스템
 # =========================================================
 def play_mp3(path):
     if os.path.exists(path):
@@ -275,7 +238,8 @@ def audio_worker():
                 obj_file = file1 if os.path.exists(file1) else file2
 
                 for f in [dir_file, obj_file, exist_file]:
-                    if not audio_queue.empty(): break
+                    if not audio_queue.empty():
+                        break
                     play_mp3(f)
 
             audio_queue.task_done()
@@ -287,7 +251,7 @@ def play_audio(data):
         audio_queue.put(data)
 
 # =========================================================
-# ⚙️ 시스템 부팅 알림 및 스레드 가동
+# ⚙️ 시스템 부팅 알림 수행
 # =========================================================
 print("라즈베리 파이 무선 스트리밍 통합 서버 가동...", flush=True)
 start_hello_file = f"{HELLO_DIR}start.mp3"
@@ -296,85 +260,98 @@ if os.path.exists(start_hello_file): play_mp3(start_hello_file)
 send_kakao_alert("함께 걷는 눈: 보행기 안전 모니터링을 시작합니다.")
 
 threading.Thread(target=ultrasonic_worker, daemon=True).start()
-threading.Thread(target=tof_worker, daemon=True).start()
 threading.Thread(target=audio_worker, daemon=True).start()
 threading.Thread(target=network_server_worker, daemon=True).start()
 
-# =========================================================
-# 7. 메인 제어 루프
-# =========================================================
-ALL_SENSORS_COMBINED = {**SENSORS_US, **SENSORS_TOF}
+# 연속 오디오 경보 방지를 위한 플래그 딕셔너리
+caution_spoken = {name: False for name in SENSORS}
 
+# =========================================================
+# 6. 메인 제어 루프
+# =========================================================
 try:
     while True:
-        # 실시간 모니터링 출력
-        print(f"[LIVE] 정면:{dist_data['front']}cm | 좌:{dist_data['left']}cm | 우:{dist_data['right']}cm | 하단:{dist_data['center_under']}cm    ", end="\r", flush=True)
-
-        # --- 7-1. 통합 센서 기반 장애물 탐지 ---
-        for direction, pins in ALL_SENSORS_COMBINED.items():
-            with dist_lock: dist = dist_data[direction]
-
-            # 완전한 오류값(0 이하) 무시
-            if dist <= 0: continue
-
-            direction_kr = direction_map.get(direction, direction)
-
-            # 🛠️ 하단 센서 (ToF) - 계단 / 낙하 감지 (일정 거리 이상이거나 측정 불가일 때 작동)
-            if 'under' in direction:
-                if dist >= pins['limit'] or dist == 999.0:
-                    if not caution_spoken[direction]:
-                        play_audio({'type': 'caution', 'direction': direction})
-                        caution_spoken[direction] = True
-
-                    if not alert_status.get(direction, False):
-                        send_kakao_alert(f"⚠️ 경고: 보행기 {direction_kr}에 낙상/턱 위험 구역이 감지되었습니다! (거리: {dist}cm)")
-                        alert_status[direction] = True
-                else:
-                    if dist < (pins['limit'] - 3):
-                        caution_spoken[direction] = False
-                        alert_status[direction] = False
-
-            # 🛠️ 상단 센서 (초음파) - 전/측방 충돌 감지
-            else:
-                if dist == 999.0:
-                    caution_spoken[direction] = False
-                    continue
-
-                if dist < pins['limit']:
-                    if not caution_spoken[direction]:
-                        play_audio({'type': 'caution', 'direction': direction})
-                        caution_spoken[direction] = True
-
-                    if not alert_status.get(direction, False):
-                        send_kakao_alert(f"🚨 경고: 보행기 {direction_kr} 쪽에 장애물이 너무 가까이 접근했습니다! (거리: {dist:.1f}cm)")
-                        alert_status[direction] = True
-                else:
-                    if dist > (pins['limit'] + 10):
-                        caution_spoken[direction] = False
-                        alert_status[direction] = False
-
-        # --- 7-2. PC(YOLOv8) 수신 데이터 기반 고정 시설물 탐지 ---
-        # 수정사항: 사물 인식 알림은 카카오톡으로 전송하지 않고 터미널 [Log] 및 안내 음성만 출력하도록 변경
-        try: line = yolo_queue.get_nowait()
-        except queue.Empty: line = ""
+        # --- 6-1. PC(YOLOv8) 수신 데이터 파싱 및 가이드 동기화 ---
+        try:
+            line = yolo_queue.get_nowait()
+        except queue.Empty:
+            line = ""
 
         if line:
             parts = line.split('_')
             if len(parts) >= 2:
                 obj_dir = parts[0]
                 obj_cls = "_".join(parts[1:])
-
-                # 음성 안내 큐 전달
+                
+                # 수신된 사물 이름을 스레드 안전하게 실시간 저장
+                with obj_lock:
+                    last_detected_object[obj_dir] = obj_cls
+                
+                # 팀원 가이드 [Log] 포맷에 맞춰 실시간으로 파이 터미널에 로그 찍기
+                with dist_lock: current_dist = dist_data.get(obj_dir, 0.0)
+                print(f"[Log] 사물: {obj_cls} | 거리: {current_dist}cm | 방향: {obj_dir}", flush=True)
+                
+                # 스피커 고유 안내 음성은 기존 워커 그대로 실행
                 play_audio({'type': 'object_alert', 'direction': obj_dir, 'class_name': obj_cls})
 
-                # 카카오톡 전송을 제거하고 요구하신 터미널 형식의 로그 출력으로 대체
-                obj_dir_kr = direction_map.get(obj_dir, obj_dir)
-                print(f"\n[Log] 인식된 사물: {obj_cls} | 방향: {obj_dir_kr} (안내 음성 출력)", flush=True)
+        # --- 6-2. 초음파 센서 기반 장애물 탐지 및 최종 메시지 트리거 ---
+        for direction, pins in SENSORS.items():
+            with dist_lock: dist_raw = dist_data[direction]
+
+            try:
+                dist = float(dist_raw)
+            except:
+                print("거리 데이터 오류", flush=True)
+                continue
+
+            if dist <= 0: continue
+
+            direction_kr = direction_map.get(direction, direction)
+
+            # [경우 A] 하단 낙상 센서 처리 (55cm 기준 낙상 음성 경보 프로토콜 유지)
+            if 'under' in direction:
+                if dist >= pins['limit'] or dist == 999.0:
+                    if not caution_spoken[direction]:
+                        play_audio({'type': 'caution', 'direction': direction})
+                        caution_spoken[direction] = True
+                else:
+                    if dist < (pins['limit'] - 3):
+                        caution_spoken[direction] = False
+
+            # [경우 B] 상단 일반 장애물 센서 처리 (센서 limit 내 진입 시 음성 경보)
+            else:
+                if dist == 999.0:
+                    caution_spoken[direction] = False
+                    if alert_sent_status.get(direction, True):
+                        alert_sent_status[direction] = False
+                    continue
+
+                if dist <= pins['limit']:
+                    if not caution_spoken[direction]:
+                        play_audio({'type': 'caution', 'direction': direction})
+                        caution_spoken[direction] = True
+                else:
+                    if dist > (pins['limit'] + 10):
+                        caution_spoken[direction] = False
+
+            # 🛠️ 최신 통합 요구사항: 10cm 이내 위험 감지 시 사물 명칭 포함 카톡 전송
+            if dist <= THRESHOLD_DISTANCE:
+                if not alert_sent_status.get(direction, False):
+                    with obj_lock:
+                        detected_obj = last_detected_object.get(direction, "장애물")
+                    
+                    # 팀원 최신 반영 메시지 포맷 (🚨 긴급 경고: ... 사물 명칭 포함)
+                    msg = f"🚨 긴급 경고: 보행기 {direction_kr} 쪽에 장애물 [{detected_obj}]이(가) 접근했습니다! (거리: {dist:.1f}cm)"
+                    send_kakao_alert(msg)
+                    alert_sent_status[direction] = True
+            else:
+                # 안전거리 확보 시 플래그 초기화
+                alert_sent_status[direction] = False
 
         time.sleep(0.01)
 
 except KeyboardInterrupt:
-    print("\n종료 프로세스", flush=True)
+    print("\n시스템을 종료합니다.", flush=True)
 finally:
     running = False
     send_kakao_alert("함께 걷는 눈: 보행기 운행을 종료합니다.")
