@@ -21,10 +21,10 @@ import adafruit_vl53l0x
 # =========================================================
 # ⚙️ 1. 카카오 디벨로퍼스 및 핵심 임계값(Threshold) 설정
 # =========================================================
-# [팀원 가이드] 카카오톡 토큰 만료 시 재발급받아 아래 문자열만 교체하면 됩니다.
+#  카카오톡 토큰 만료 시 재발급받아 아래 문자열만 교체하면 됩니다.
 ACCESS_TOKEN = "V6vqe5l-eiLXsvP4sm8jgiWEKanHg1k_AAAAAQoNDF4AAAGe-ATlELbGP5Eb7W-4"
 
-# [팀원 가이드] 카카오톡 긴급 알림을 보낼 절대 기준 거리입니다. (단위: cm)
+#  카카오톡 긴급 알림을 보낼 절대 기준 거리입니다. (단위: cm)
 # 테스트 환경에 따라 너무 자주 울리면 15.0이나 20.0 등으로 조절하세요.
 THRESHOLD_DISTANCE = 10.0  
 
@@ -72,7 +72,7 @@ GPIO.setmode(GPIO.BCM)      # 라즈베리 파이 핀 배열 기준을 BCM(GPIO 
 GPIO.setwarnings(False)
 
 # 🟢 상단 초음파 센서 핀 맵 및 개별 경고 거리 설정
-# [팀원 가이드] 센서 점퍼선 결선이 바뀌면 아래 'trig'와 'echo' 번호를 하드웨어와 맞추면 됩니다.
+#  센서 점퍼선 결선이 바뀌면 아래 'trig'와 'echo' 번호를 하드웨어와 맞추면 됩니다.
 # 'limit'는 스피커로 "조심하세요" 경고 멘트를 내보낼 기준 거리(cm)입니다.
 SENSORS_US = {
     'front': {'trig': 4,  'echo': 5,  'limit': 50},  # 정면 초음파: 50cm 이내 접근 시 경고
@@ -413,7 +413,7 @@ try:
                         caution_spoken[direction] = False
 
             # [B] 카카오톡 실시간 연동 조건문: 10cm 이하 최접근 긴급 위험 구역
-            # [팀원 가이드] 실제 주행 중 10cm가 너무 가깝다면 상단의 THRESHOLD_DISTANCE 변수를 키우세요.
+            # 실제 주행 중 10cm가 너무 가깝다면 상단의 THRESHOLD_DISTANCE 변수를 키우세요.
             if dist <= THRESHOLD_DISTANCE:
                 # 아직 이 방향에 대해 카카오톡 경고를 발송하지 않은 상태(False)라면 첫 1회 즉각 발송
                 if not alert_status.get(direction, False):
